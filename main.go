@@ -8,7 +8,6 @@ import (
 	"embed"
 	"fmt"
 	"io"
-
 	"os"
 	"os/exec"
 	"os/signal"
@@ -59,8 +58,6 @@ const (
 	// defaultTapThreshold separates a firm tap from a hard slap.
 	defaultTapThreshold = 0.35
 
-	// defaultStepTimeoutSec is how many seconds after a step before the
-	// sequence resets back to step 0.
 	defaultStepTimeoutSec = 5
 
 	defaultSensorPollInterval = 10 * time.Millisecond
@@ -273,10 +270,6 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 	var lastEventTime time.Time
 	var lastActionTime time.Time
 
-	// step tracks the current position in the 3-step sequence:
-	//   0 → waiting for first tap  (git add .)
-	//   1 → waiting for second tap (git commit)
-	//   2 → waiting for slap       (git push)
 	step := 0
 	var lastStepTime time.Time
 
@@ -312,7 +305,6 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 		now := time.Now()
 		tNow := float64(now.UnixNano()) / 1e9
 
-		// Reset sequence if step timeout has elapsed since last step
 		if step > 0 && !lastStepTime.IsZero() && now.Sub(lastStepTime) > tuning.stepTimeout {
 			fmt.Printf("[timeout] sequence reset (was at step %d)\n", step+1)
 			step = 0
@@ -392,7 +384,7 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 			} else {
 				fmt.Printf("[step 3  amp=%.3fg] → slap harder to push! (need %.3f+)\n",
 					ev.Amplitude, tuning.tapThreshold)
-				lastStepTime = now // refresh timeout
+				lastStepTime = now 
 			}
 		}
 	}
@@ -403,7 +395,7 @@ func gitStage(repo string) error {
 	return runGit(repo, "add", ".")
 }
 
-// gitCommit runs `git commit` with an auto-generated message in the repo directory.
+
 func gitCommit(repo string) error {
 	msg, err := autoCommitMessage(repo)
 	if err != nil {
