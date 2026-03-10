@@ -16,7 +16,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
 	"github.com/charmbracelet/fang"
 	"github.com/gopxl/beep/v2"
 	"github.com/gopxl/beep/v2/mp3"
