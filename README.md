@@ -76,6 +76,11 @@ Use `--dry-run` to calibrate thresholds without running real git commands.
 4. Advances through the 3-step sequence, checking for timeouts
 5. Executes the git command and plays the corresponding step's sound from `audio/sounds/`
 
+## Contributors
+
+- **[Vineet Agarwal](https://github.com/VineeTagarwaL-code)** — Creator
+- **[Rishab Agarwal](https://github.com/Rishabjs03)** — Co-Author
+
 ## License
 
 MIT — Vineet Agarwal
