@@ -100,17 +100,7 @@ func main() {
 	cmd := &cobra.Command{
 		Use:   "gitslap",
 		Short: "Git automation via physical gestures on Apple Silicon",
-		Long: `gitslap listens to the Apple Silicon accelerometer and maps physical
-gestures to git commands in sequence:
-
-  1st tap (firm)     → git add .   (plays 01.mp3)
-  2nd tap (firm)     → git commit  (plays 02.mp3)
-  3rd gesture (slap) → git push    (plays 03.mp3)
-
-The sequence resets after 5 seconds of inactivity.
-
-Replace audio/sounds/01.mp3, 02.mp3, 03.mp3 with your own sounds.
-Requires sudo for IOKit HID accelerometer access.`,
+		Long: ``,
 		Version: version,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tuning := defaultTuning()
@@ -272,21 +262,15 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 	step := 0
 	var lastStepTime time.Time
 
-	presetLabel := "default"
-	if fastMode {
-		presetLabel = "fast"
-	}
+	// presetLabel := "default"
+	// if fastMode {
+	// 	presetLabel = "fast"
+	// }
 
-	fmt.Printf("gitslap: git automation active (repo: %s, tuning: %s)\n", repo, presetLabel)
+	fmt.Printf("gitslap: listening (repo: %s)\n", repo)
 	if dryRun {
-		fmt.Println("gitslap: DRY RUN — git commands will be printed, not executed")
+		fmt.Println("gitslap: DRY RUN")
 	}
-	fmt.Printf("  tap-threshold: %.3f  |  step-timeout: %ds  |  cooldown: %dms\n",
-		tuning.tapThreshold, int(tuning.stepTimeout.Seconds()), int(tuning.cooldown.Milliseconds()))
-	fmt.Println("  1st tap (firm)   → git add .   (01.mp3)")
-	fmt.Println("  2nd tap (firm)   → git commit  (02.mp3)")
-	fmt.Println("  3rd slap (hard)  → git push    (03.mp3)")
-	fmt.Println("  ctrl+c to quit")
 
 	ticker := time.NewTicker(tuning.pollInterval)
 	defer ticker.Stop()
@@ -305,7 +289,6 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 		tNow := float64(now.UnixNano()) / 1e9
 
 		if step > 0 && !lastStepTime.IsZero() && now.Sub(lastStepTime) > tuning.stepTimeout {
-			fmt.Printf("[timeout] sequence reset (was at step %d)\n", step+1)
 			step = 0
 			lastStepTime = time.Time{}
 		}
@@ -347,7 +330,7 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 			if ev.Amplitude >= tuning.minAmplitude {
 				step = 1
 				lastStepTime = now
-				fmt.Printf("[step 1  amp=%.3fg] → git add .\n", ev.Amplitude)
+				fmt.Println("→ git add .")
 				go func() {
 					if err := gitStage(repo); err != nil {
 						fmt.Fprintf(os.Stderr, "gitslap: git add: %v\n", err)
@@ -360,7 +343,7 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 			if ev.Amplitude >= tuning.minAmplitude {
 				step = 2
 				lastStepTime = now
-				fmt.Printf("[step 2  amp=%.3fg] → git commit\n", ev.Amplitude)
+				fmt.Println("→ git commit")
 				go func() {
 					if err := gitCommit(repo); err != nil {
 						fmt.Fprintf(os.Stderr, "gitslap: git commit: %v\n", err)
@@ -373,7 +356,7 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 			if ev.Amplitude >= tuning.tapThreshold {
 				step = 0 
 				lastStepTime = time.Time{}
-				fmt.Printf("[step 3  amp=%.3fg] → git push 🚀\n", ev.Amplitude)
+				fmt.Println("→ git push 🚀")
 				go func() {
 					if err := gitPush(repo); err != nil {
 						fmt.Fprintf(os.Stderr, "gitslap: git push: %v\n", err)
@@ -381,9 +364,7 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 					sounds.playFile("03.mp3", &speakerInit)
 				}()
 			} else {
-				fmt.Printf("[step 3  amp=%.3fg] → slap harder to push! (need %.3f+)\n",
-					ev.Amplitude, tuning.tapThreshold)
-				lastStepTime = now 
+				lastStepTime = now
 			}
 		}
 	}
