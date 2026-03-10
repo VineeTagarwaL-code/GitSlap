@@ -6,11 +6,13 @@ Hit your Apple Silicon MacBook to trigger git commands. Uses the built-in accele
 
 ## Gesture Map
 
-| Gesture | Action |
-|---|---|
-| Tap (light hit) | `git add .` — stages everything, arms a 5s window |
-| Slap within 5s of a tap | `git add . && git commit -m "auto: ..." && git push` |
-| Slap with no prior tap | `git push origin HEAD` |
+GitSlap uses a 3-step sequence. You must trigger each within 5 seconds of the last, otherwise the sequence resets.
+
+| Sequence | Gesture | Action |
+|---|---|---|
+| 1 | Firm Tap | `git add .` |
+| 2 | Firm Tap | `git commit -m "auto: ..."` |
+| 3 | Hard Slap | `git push origin HEAD` |
 
 Commit messages are auto-generated from staged filenames, e.g. `auto: main.go, README.md`.
 
@@ -50,7 +52,9 @@ audio/sounds/02.mp3
 audio/sounds/03.mp3
 ```
 
-One is picked at random on each gesture.
+- `01.mp3` plays on Step 1 (`git add .`)
+- `02.mp3` plays on Step 2 (`git commit`)
+- `03.mp3` plays on Step 3 (`git push`)
 
 ## Tuning
 
@@ -58,7 +62,7 @@ One is picked at random on each gesture.
 |---|---|---|
 | `--min-amplitude` | `0.12` | Minimum g-force to register any gesture |
 | `--tap-threshold` | `0.35` | Below this = tap, at/above = slap |
-| `--tap-arm-window` | `5` | Seconds after a tap during which a slap triggers the full pipeline |
+| `--step-timeout` | `5` | Seconds of inactivity after which the sequence resets |
 | `--cooldown` | `750` | Minimum ms between gesture responses |
 | `--fast` | off | 4ms polling, 350ms cooldown, higher sensitivity |
 
@@ -68,9 +72,9 @@ Use `--dry-run` to calibrate thresholds without running real git commands.
 
 1. Reads raw accelerometer data via IOKit HID (Apple SPU sensor)
 2. Runs vibration detection to identify impacts
-3. Classifies by amplitude: below `--tap-threshold` is a tap, above is a slap
-4. Checks if a tap recently armed the window to decide which action to run
-5. Executes the git command and plays a random sound from `audio/sounds/`
+3. Classifies by amplitude: below `--tap-threshold` is a tap, at or above is a slap
+4. Advances through the 3-step sequence, checking for timeouts
+5. Executes the git command and plays the corresponding step's sound from `audio/sounds/`
 
 ## License
 
