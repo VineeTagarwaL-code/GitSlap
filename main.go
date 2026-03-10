@@ -8,7 +8,7 @@ import (
 	"embed"
 	"fmt"
 	"io"
-	"math/rand"
+
 	"os"
 	"os/exec"
 	"os/signal"
@@ -56,13 +56,12 @@ const (
 
 	defaultCooldownMs = 750
 
-	// defaultTapThreshold separates a light intentional tap from a hard slap.
+	// defaultTapThreshold separates a firm tap from a hard slap.
 	defaultTapThreshold = 0.35
 
-	// defaultTapArmWindowSec is how many seconds after a tap during which a
-	// slap is treated as "tap-then-slap" (full add+commit+push pipeline).
-	// After this window expires, a slap alone just pushes.
-	defaultTapArmWindowSec = 5
+	// defaultStepTimeoutSec is how many seconds after a step before the
+	// sequence resets back to step 0.
+	defaultStepTimeoutSec = 5
 
 	defaultSensorPollInterval = 10 * time.Millisecond
 	defaultMaxSampleBatch     = 200
@@ -72,7 +71,7 @@ const (
 type runtimeTuning struct {
 	minAmplitude   float64
 	tapThreshold   float64
-	tapArmWindow   time.Duration
+	stepTimeout    time.Duration
 	cooldown       time.Duration
 	pollInterval   time.Duration
 	maxBatch       int
@@ -82,7 +81,7 @@ func defaultTuning() runtimeTuning {
 	return runtimeTuning{
 		minAmplitude: defaultMinAmplitude,
 		tapThreshold: defaultTapThreshold,
-		tapArmWindow: defaultTapArmWindowSec * time.Second,
+		stepTimeout:  time.Duration(defaultStepTimeoutSec) * time.Second,
 		cooldown:     time.Duration(defaultCooldownMs) * time.Millisecond,
 		pollInterval: defaultSensorPollInterval,
 		maxBatch:     defaultMaxSampleBatch,
@@ -106,14 +105,13 @@ func main() {
 		Use:   "gitslap",
 		Short: "Git automation via physical gestures on Apple Silicon",
 		Long: `gitslap listens to the Apple Silicon accelerometer and maps physical
-gestures to git commands:
+gestures to git commands in sequence:
 
-  tap                → git add .  (also arms a 5s window)
-  slap after tap     → git add . + git commit + git push  (full pipeline)
-  slap alone         → git push origin HEAD  (no new commit)
+  1st tap (firm)     → git add .   (plays 01.mp3)
+  2nd tap (firm)     → git commit  (plays 02.mp3)
+  3rd gesture (slap) → git push    (plays 03.mp3)
 
-The tap arms a window. If you slap within that window, it runs the full
-pipeline. A slap with no prior tap just pushes what is already committed.
+The sequence resets after 5 seconds of inactivity.
 
 Replace audio/sounds/01.mp3, 02.mp3, 03.mp3 with your own sounds.
 Requires sudo for IOKit HID accelerometer access.`,
@@ -132,8 +130,8 @@ Requires sudo for IOKit HID accelerometer access.`,
 			if cmd.Flags().Changed("tap-threshold") {
 				tuning.tapThreshold = tapThreshold
 			}
-			if cmd.Flags().Changed("tap-arm-window") {
-				tuning.tapArmWindow = time.Duration(tapArmWindowS) * time.Second
+			if cmd.Flags().Changed("step-timeout") {
+				tuning.stepTimeout = time.Duration(tapArmWindowS) * time.Second
 			}
 			return run(cmd.Context(), tuning)
 		},
@@ -146,7 +144,7 @@ Requires sudo for IOKit HID accelerometer access.`,
 	cmd.Flags().StringVar(&repoPath, "repo", "", "Path to git repo (defaults to current working directory)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print git commands without executing them")
 	cmd.Flags().Float64Var(&tapThreshold, "tap-threshold", defaultTapThreshold, "Amplitude below this is a tap; at or above is a slap (0.0–1.0)")
-	cmd.Flags().IntVar(&tapArmWindowS, "tap-arm-window", defaultTapArmWindowSec, "Seconds after a tap during which a slap triggers the full add+commit+push pipeline")
+	cmd.Flags().IntVar(&tapArmWindowS, "step-timeout", defaultStepTimeoutSec, "Seconds of inactivity after which the sequence resets")
 
 	if err := fang.Execute(context.Background(), cmd); err != nil {
 		os.Exit(1)
@@ -240,8 +238,8 @@ func loadSounds() (*soundFiles, error) {
 
 var speakerMu sync.Mutex
 
-func (sf *soundFiles) playRandom(speakerInit *bool) {
-	path := sf.paths[rand.Intn(len(sf.paths))]
+func (sf *soundFiles) playFile(filename string, speakerInit *bool) {
+	path := "audio/sounds/" + filename
 	data, err := sf.fs.ReadFile(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gitslap: read %s: %v\n", path, err)
@@ -275,9 +273,12 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 	var lastEventTime time.Time
 	var lastActionTime time.Time
 
-	// lastTapTime tracks when the most recent tap fired.
-	// A zero value means no tap has occurred yet (or the window has expired).
-	var lastTapTime time.Time
+	// step tracks the current position in the 3-step sequence:
+	//   0 → waiting for first tap  (git add .)
+	//   1 → waiting for second tap (git commit)
+	//   2 → waiting for slap       (git push)
+	step := 0
+	var lastStepTime time.Time
 
 	presetLabel := "default"
 	if fastMode {
@@ -288,11 +289,11 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 	if dryRun {
 		fmt.Println("gitslap: DRY RUN — git commands will be printed, not executed")
 	}
-	fmt.Printf("  tap-threshold: %.3f  |  tap-arm window: %ds  |  cooldown: %dms\n",
-		tuning.tapThreshold, int(tuning.tapArmWindow.Seconds()), int(tuning.cooldown.Milliseconds()))
-	fmt.Println("  tap              → git add .  (arms a window for the next slap)")
-	fmt.Println("  slap after tap   → git add . + commit + push")
-	fmt.Println("  slap alone       → git push")
+	fmt.Printf("  tap-threshold: %.3f  |  step-timeout: %ds  |  cooldown: %dms\n",
+		tuning.tapThreshold, int(tuning.stepTimeout.Seconds()), int(tuning.cooldown.Milliseconds()))
+	fmt.Println("  1st tap (firm)   → git add .   (01.mp3)")
+	fmt.Println("  2nd tap (firm)   → git commit  (02.mp3)")
+	fmt.Println("  3rd slap (hard)  → git push    (03.mp3)")
 	fmt.Println("  ctrl+c to quit")
 
 	ticker := time.NewTicker(tuning.pollInterval)
@@ -310,6 +311,13 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 
 		now := time.Now()
 		tNow := float64(now.UnixNano()) / 1e9
+
+		// Reset sequence if step timeout has elapsed since last step
+		if step > 0 && !lastStepTime.IsZero() && now.Sub(lastStepTime) > tuning.stepTimeout {
+			fmt.Printf("[timeout] sequence reset (was at step %d)\n", step+1)
+			step = 0
+			lastStepTime = time.Time{}
+		}
 
 		samples, newTotal := accelRing.ReadNew(lastAccelTotal, shm.AccelScale)
 		lastAccelTotal = newTotal
@@ -342,38 +350,49 @@ func listenForGestures(ctx context.Context, sounds *soundFiles, accelRing *shm.R
 
 		lastActionTime = now
 
-		if ev.Amplitude < tuning.tapThreshold {
-			// Light tap → stage and arm the window
-			lastTapTime = now
-			fmt.Printf("[tap    amp=%.3fg] → git add .  (slap within %ds to commit+push)\n",
-				ev.Amplitude, int(tuning.tapArmWindow.Seconds()))
-			go func() {
-				if err := gitStage(repo); err != nil {
-					fmt.Fprintf(os.Stderr, "gitslap: git add: %v\n", err)
-				}
-				sounds.playRandom(&speakerInit)
-			}()
-		} else {
-			// Hard slap — check if a tap armed the window
-			tapArmed := !lastTapTime.IsZero() && now.Sub(lastTapTime) <= tuning.tapArmWindow
-			lastTapTime = time.Time{} // consume the arm regardless
-
-			if tapArmed {
-				fmt.Printf("[slap   amp=%.3fg] → git add . + commit + push\n", ev.Amplitude)
+		switch step {
+		case 0:
+			// Step 1: firm tap → git add .
+			if ev.Amplitude >= tuning.minAmplitude {
+				step = 1
+				lastStepTime = now
+				fmt.Printf("[step 1  amp=%.3fg] → git add .\n", ev.Amplitude)
 				go func() {
-					if err := gitStageCommitAndPush(repo); err != nil {
-						fmt.Fprintf(os.Stderr, "gitslap: pipeline: %v\n", err)
+					if err := gitStage(repo); err != nil {
+						fmt.Fprintf(os.Stderr, "gitslap: git add: %v\n", err)
 					}
-					sounds.playRandom(&speakerInit)
+					sounds.playFile("01.mp3", &speakerInit)
 				}()
-			} else {
-				fmt.Printf("[slap   amp=%.3fg] → git push\n", ev.Amplitude)
+			}
+		case 1:
+			// Step 2: firm tap → git commit
+			if ev.Amplitude >= tuning.minAmplitude {
+				step = 2
+				lastStepTime = now
+				fmt.Printf("[step 2  amp=%.3fg] → git commit\n", ev.Amplitude)
+				go func() {
+					if err := gitCommit(repo); err != nil {
+						fmt.Fprintf(os.Stderr, "gitslap: git commit: %v\n", err)
+					}
+					sounds.playFile("02.mp3", &speakerInit)
+				}()
+			}
+		case 2:
+			// Step 3: hard slap → git push
+			if ev.Amplitude >= tuning.tapThreshold {
+				step = 0 
+				lastStepTime = time.Time{}
+				fmt.Printf("[step 3  amp=%.3fg] → git push 🚀\n", ev.Amplitude)
 				go func() {
 					if err := gitPush(repo); err != nil {
 						fmt.Fprintf(os.Stderr, "gitslap: git push: %v\n", err)
 					}
-					sounds.playRandom(&speakerInit)
+					sounds.playFile("03.mp3", &speakerInit)
 				}()
+			} else {
+				fmt.Printf("[step 3  amp=%.3fg] → slap harder to push! (need %.3f+)\n",
+					ev.Amplitude, tuning.tapThreshold)
+				lastStepTime = now // refresh timeout
 			}
 		}
 	}
@@ -384,20 +403,13 @@ func gitStage(repo string) error {
 	return runGit(repo, "add", ".")
 }
 
-// gitStageCommitAndPush runs git add, then commits with an auto message,
-// then pushes to origin HEAD. Used when a tap-then-slap sequence is detected.
-func gitStageCommitAndPush(repo string) error {
-	if err := gitStage(repo); err != nil {
-		return err
-	}
+// gitCommit runs `git commit` with an auto-generated message in the repo directory.
+func gitCommit(repo string) error {
 	msg, err := autoCommitMessage(repo)
 	if err != nil {
 		msg = "auto: wip"
 	}
-	if err := runGit(repo, "commit", "-m", msg); err != nil {
-		return err
-	}
-	return gitPush(repo)
+	return runGit(repo, "commit", "-m", msg)
 }
 
 // gitPush runs `git push origin HEAD` in the repo directory.
